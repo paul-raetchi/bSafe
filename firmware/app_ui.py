@@ -68,30 +68,9 @@ class AppUI:
                 self.model.status_seconds += 1
 
             # update model from (real or mock) devices
-            try:
-                self.model.input_voltage_v = self.board.ina_sys.read_bus_voltage_v()
-                self.model.input_current_a = self.board.ina_sys.read_current_a()
-            except Exception:
-                pass
-
-            try:
-                self.model.batt_voltage_v = self.board.ina_batt.read_bus_voltage_v()
-                self.model.batt_current_a = self.board.ina_batt.read_current_a()
-            except Exception:
-                pass
-
-            try:
-                from control.ntc import ts_percent_to_temp_c
-                ts_pct = self.board.bq.read_ts_percent_regn()
-                self.model.batt_temp_c = ts_percent_to_temp_c(
-                    ts_percent=ts_pct,
-                    r_pullup_ohm=config.TS_PULLUP_OHMS,
-                    r0_ohm=config.TS_NTC_R0_OHMS,
-                    beta_k=config.TS_NTC_BETA_K,
-                    t0_c=config.TS_NTC_T0_C,
-                )
-            except Exception:
-                pass
+            self._update_input_metrics()
+            self._update_battery_metrics()
+            self._update_batt_temp()
 
             # actual MCU temp (best effort)
             self.model.mcu_temp_c = _read_mcu_temp_c_best_effort(self.model.mcu_temp_c)
@@ -114,6 +93,43 @@ class AppUI:
     def stop(self):
         self._running = False
         self._task = None
+
+    # -------------------------
+    # Telemetry updates
+    # -------------------------
+    def _update_input_metrics(self):
+        try:
+            self.model.input_voltage_v = self.board.ina_sys.read_bus_voltage_v()
+            self.model.input_current_a = self.board.ina_sys.read_current_a()
+        except Exception:
+            pass
+
+    def _update_battery_metrics(self):
+        try:
+            self.model.batt_voltage_v = self.board.ina_batt.read_bus_voltage_v()
+            self.model.batt_current_a = self.board.ina_batt.read_current_a()
+        except Exception:
+            pass
+
+    def _update_batt_temp(self):
+        try:
+            if not self.board.has_bq:
+                self.model.batt_temp_c = None
+                return
+            from control.ntc import ts_percent_to_temp_c
+            ts_pct = self.board.bq.read_ts_percent_regn()
+            temp_c = ts_percent_to_temp_c(
+                ts_percent=ts_pct,
+                r_pullup_ohm=config.TS_PULLUP_OHMS,
+                r0_ohm=config.TS_NTC_R0_OHMS,
+                beta_k=config.TS_NTC_BETA_K,
+                t0_c=config.TS_NTC_T0_C,
+            )
+            if temp_c != temp_c:  # NaN check
+                temp_c = None
+            self.model.batt_temp_c = temp_c
+        except Exception:
+            self.model.batt_temp_c = None
 
     # -------------------------
     # REPL helpers for button injection
@@ -156,7 +172,23 @@ class AppUI:
         if ts_percent is not None:
             if hasattr(self.board.bq, "ts_percent"):
                 self.board.bq.ts_percent = float(ts_percent)
-            self.model.batt_temp_c = float(ts_percent)
+            if self.board.has_bq:
+                try:
+                    from control.ntc import ts_percent_to_temp_c
+                    temp_c = ts_percent_to_temp_c(
+                        ts_percent=float(ts_percent),
+                        r_pullup_ohm=config.TS_PULLUP_OHMS,
+                        r0_ohm=config.TS_NTC_R0_OHMS,
+                        beta_k=config.TS_NTC_BETA_K,
+                        t0_c=config.TS_NTC_T0_C,
+                    )
+                    if temp_c != temp_c:
+                        temp_c = None
+                    self.model.batt_temp_c = temp_c
+                except Exception:
+                    self.model.batt_temp_c = None
+            else:
+                self.model.batt_temp_c = None
 
         if state_label is not None:
             self.model.device_state_label = str(state_label)

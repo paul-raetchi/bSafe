@@ -244,16 +244,41 @@ class ChargerStateMachine:
             t["ibat_a"] = self.board.ina_batt.read_current_a()
         except Exception:
             pass
+        if getattr(self.board, "has_bq", False):
+            t["bq_ts"] = self._read_bq_ts_percent()
+            t["bq_chrg_stat"] = self._read_bq_chrg_stat()
+        return t
+
+    def _read_bq_ts_percent(self):
         try:
-            t["bq_ts"] = self.board.bq.read_ts_percent_regn()
+            return self.board.bq.read_ts_percent_regn()
         except Exception:
-            pass
+            return None
+
+    def _read_bq_chrg_stat(self):
         try:
             st = self.board.bq.read_status()
-            t["bq_chrg_stat"] = st.get("chrg_stat", None)
+            return st.get("chrg_stat", None)
         except Exception:
-            pass
-        return t
+            return None
+
+    def _convert_ts_percent_to_temp_c(self, ts_percent):
+        if ts_percent is None:
+            return None
+        try:
+            from control.ntc import ts_percent_to_temp_c
+            temp_c = ts_percent_to_temp_c(
+                ts_percent=ts_percent,
+                r_pullup_ohm=config.TS_PULLUP_OHMS,
+                r0_ohm=config.TS_NTC_R0_OHMS,
+                beta_k=config.TS_NTC_BETA_K,
+                t0_c=config.TS_NTC_T0_C,
+            )
+            if temp_c != temp_c:
+                return None
+            return temp_c
+        except Exception:
+            return None
 
     # -------------------------
     # Main update
@@ -267,19 +292,9 @@ class ChargerStateMachine:
         vin  = tel["vin_v"]
         iin  = tel["iin_a"]
         # Convert TS% -> °C (best effort). If conversion fails, keep raw.
-        batt_temp = tel["bq_ts"]
-        try:
-            from control.ntc import ts_percent_to_temp_c
-            if batt_temp is not None:
-                batt_temp = ts_percent_to_temp_c(
-                    ts_percent=batt_temp,
-                    r_pullup_ohm=config.TS_PULLUP_OHMS,
-                    r0_ohm=config.TS_NTC_R0_OHMS,
-                    beta_k=config.TS_NTC_BETA_K,
-                    t0_c=config.TS_NTC_T0_C,
-                )
-        except Exception:
-            pass
+        batt_temp_c = None
+        if getattr(self.board, "has_bq", False):
+            batt_temp_c = self._convert_ts_percent_to_temp_c(tel["bq_ts"])
 
 
         self._last_vbat_for_resume = vbat
@@ -309,7 +324,7 @@ class ChargerStateMachine:
         # safety
         ok, fault = self.safety.check(
             vin_v=vin, vbat_v=vbat, ibat_a=ibat, iin_a=iin,
-            mcu_temp_c=mcu_temp_c, batt_temp_c=batt_temp
+            mcu_temp_c=mcu_temp_c, batt_temp_c=batt_temp_c
         )
         if not ok:
             self.last_fault = fault
@@ -452,7 +467,7 @@ class ChargerStateMachine:
             "iin_a": iin,
             "vbat_v": vbat,
             "ibat_a": ibat,
-            "batt_temp": batt_temp,
+            "batt_temp_c": batt_temp_c,
             "fault": self.last_fault,
             "r_chg_mohm": self.health.r_charge_mohm,
             "r_dis_mohm": self.health.r_discharge_mohm,

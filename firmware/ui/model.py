@@ -15,7 +15,7 @@ class UIModel:
 
         self.batt_voltage_v = 0.0
         self.batt_current_a = 0.0
-        self.batt_temp_c = 0.0
+        self.batt_temp_c = None
 
         self.cfg_chemistry = "LFP"
         self.cfg_voltage_offset_mv = 0

@@ -1,5 +1,7 @@
 # ui/renderer.py
 
+import math
+
 from ui import pages
 
 CHAR_W = 8
@@ -62,7 +64,10 @@ class UIRenderer:
         elif m.status_subpage == pages.SUB_BATTERY:
             fb.text("VBAT: {:.2f}V".format(m.batt_voltage_v), X_OFF, 18, 1)
             fb.text("IBAT: {:+.2f}A".format(m.batt_current_a), X_OFF, 32, 1)
-            fb.text("TBAT: {:.1f}C".format(m.batt_temp_c), X_OFF, 46, 1)
+            if m.batt_temp_c is None or (isinstance(m.batt_temp_c, float) and math.isnan(m.batt_temp_c)):
+                fb.text("TBAT: N/A", X_OFF, 46, 1)
+            else:
+                fb.text("TBAT: {:.1f}C".format(m.batt_temp_c), X_OFF, 46, 1)
 
     # -------- CONFIG --------
     def _render_config(self, m):
