@@ -136,6 +136,7 @@ class OperationalStatus:
     mode_change_request: bool = False
     chrg_stat:    ChrgStat = ChrgStat.NONE
     dsc_pct:      int      = 0
+    mode:         Mode     = Mode.WAIT   # not on wire; set by engine from commanded state
     rx_time:      float    = field(default_factory=time.time)
 
     @classmethod

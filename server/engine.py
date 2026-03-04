@@ -327,6 +327,7 @@ class Engine:
         self._states: Dict[int, DeviceState] = {}       # address → DeviceState
         self._auto_program: Optional[dict] = None        # steps for auto mode
         self._auto_mode = False
+        self._estop = False
         self._limits: dict = db.get_hard_limits()
         self._lock = threading.Lock()
         self._poll_thread = None
@@ -354,14 +355,13 @@ class Engine:
         with self._lock:
             if addr not in self._states:
                 self._states[addr] = DeviceState(address=addr)
-                db.log_event("device_seen", address=addr, data={"first_seen": True})
-                if self._estop:
-                    self._send_cmd(addr, mode=4)  # immediately WAIT any new device
+                db.log_event("device_seen", address=addr,
+                             data={"first_seen": True})
             s = self._states[addr]
             prev_batt = s.batt_present
             prev_online = s.online
 
-            s.mode         = int(status.mode)
+            # mode not in OP frame wire data — preserved from last send_cmd
             s.vbat_v       = status.vbat_v
             s.ibat_a       = status.ibat_a
             s.error        = status.error
@@ -386,7 +386,8 @@ class Engine:
                                  session_id=session.session_id if session else None,
                                  data={"vbat": s.vbat_v})
                     # Auto mode: start program if battery above DETECT threshold
-                    if self._auto_mode and self._auto_program and not session:
+                    if self._auto_mode and self._auto_program and not session \
+                            and not self._estop:
                         self._start_session_locked(addr, self._auto_program)
 
                 elif not is_present and prev_batt:
@@ -401,6 +402,9 @@ class Engine:
             if not prev_online:
                 db.log_event("device_online", address=addr,
                              data={"vbat": s.vbat_v})
+                # If e-stop is latched, immediately command WAIT to any new device
+                if self._estop:
+                    self._send_cmd(addr, mode=4)  # WAIT
 
     def on_telemetry(self, address: int, rpm: int, bq_temp_c: int,
                      ir_uohm: int, vbat_v: float, ibat_a: float):
@@ -486,9 +490,9 @@ class Engine:
 
     def start_program(self, addresses: List[int], steps: list,
                       program_id=None, program_title=None, program_body=None):
-        self._estop = False
         started = []
         with self._lock:
+            self._estop = False
             for addr in addresses:
                 sid = self._start_session_locked(
                     addr, steps, program_id, program_title, program_body)
@@ -498,8 +502,8 @@ class Engine:
 
     def start_auto_mode(self, steps: list, program_id=None,
                         program_title=None, program_body=None):
-        self._estop = False
         with self._lock:
+            self._estop        = False
             self._auto_mode    = True
             self._auto_program = steps
         log.info("Auto mode enabled")
@@ -512,10 +516,12 @@ class Engine:
     def stop_all(self):
         with self._lock:
             self._estop = True
-            self.stop_auto_mode()
+            self._auto_mode    = False
+            self._auto_program = None
             for session in self._sessions.values():
                 if session.status in ("running", "paused"):
                     session.stop()
+        log.warning("E-STOP latched — no programs will start until cleared")
 
     def pause_device(self, address: int):
         with self._lock:
